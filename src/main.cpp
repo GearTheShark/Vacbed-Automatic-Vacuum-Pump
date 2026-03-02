@@ -9,6 +9,7 @@ const uint8_t SAFETY_RELAY_PIN = 8; // MOSFET защитного реле
 
 // Желаемый вакуум дефолтное значение
 float dynamicTargetVacuumKPa = 25.0;
+const float MAX_ALLOWED_VACUUM = 40.0;
 
 // Гистерезис
 const float PUMP_ON_DELTA = 5.0;  // Включение ниже цели
@@ -17,13 +18,13 @@ const float PUMP_OFF_DELTA = 2.0; // Выключение выше цели
 // таймеры и задержки
 const unsigned long RESTART_DELAY_MS = 15000; // задержка повторного включения
 const unsigned long MAX_RUN_TIME_MS = 60000;  // максимум 1 минута непрерывной работы
-const unsigned long STARTUP_DELAY_MS = 5000;  // задержка включения реле после старта
+const unsigned long STARTUP_DELAY_MS = 2000;  // задержка включения реле после старта
 
 // АЦП
-const float ADC_REFERENCE_VOLTAGE = 5.0;
+const float ADC_REFERENCE_VOLTAGE = 4.7;
 const float ADC_MAX_VALUE = 1023.0;
 const float SENSOR_MIN_VOLT = 0.5;
-const float SENSOR_MAX_VOLT = 4.5;
+const float SENSOR_MAX_VOLT = 4.43;
 
 // Аварийные границы датчика давления (УТОЧНИ)
 const float SENSOR_ERROR_LOW = 0.4;
@@ -90,7 +91,7 @@ float readPotentiometerKPa()
 {
   int raw = analogRead(POT_PIN); // 0–1023
   // Переводим в 10 - 40 кПа
-  float mapped = map(raw, 0, 1023, 10, 40);
+  float mapped = map(raw, 0, 1023, 10, 30);
   //float mapped = 30; //тест
   return mapped;
 }
@@ -104,24 +105,23 @@ float readPressureKPa()
   for (uint8_t i = 0; i < FILTER_SAMPLES; i++)
   {
     sum += analogRead(PRESSURE_PIN);
+     //float sensorNOW = analogRead(PRESSURE_PIN);
     delay(5);
   }
 
   float adcValue = sum / (float)FILTER_SAMPLES;
   float voltage = adcValue * ADC_REFERENCE_VOLTAGE / ADC_MAX_VALUE;
+  //Serial.println(voltage);
 
   if (voltage < SENSOR_ERROR_LOW || voltage > SENSOR_ERROR_HIGH)
   {
     emergencyStop("Sensor voltage out of range");
   }
 
-  float pressureKPa = (voltage - SENSOR_MIN_VOLT) *
-                      (100.0 / (SENSOR_MAX_VOLT - SENSOR_MIN_VOLT));
+  float pressureKPa = (SENSOR_MAX_VOLT - voltage) * (100.0 / (SENSOR_MAX_VOLT - SENSOR_MIN_VOLT));
   // Ограничение значений
-  if (pressureKPa < 0)
-    pressureKPa = 0;
-  if (pressureKPa > 100)
-    pressureKPa = 100;
+  if (pressureKPa < 0) pressureKPa = 0;
+  if (pressureKPa > 100) pressureKPa = 100;
 
   return pressureKPa;
 }
@@ -161,8 +161,7 @@ void controlPump(float currentVacuum, float targetVacuum)
 
   if (!pumpState)
   {
-    if (currentVacuum <= pumpOnThreshold &&
-        (!firstStartCompleted || (now - lastPumpStopTime) >= RESTART_DELAY_MS))
+    if (currentVacuum <= pumpOnThreshold && (!firstStartCompleted || (now - lastPumpStopTime) >= RESTART_DELAY_MS))
     {
       pumpState = true;
       pumpStartTime = now;
@@ -224,8 +223,10 @@ void setup()
 void loop()
 {
   wdt_reset();
-
   float currentVacuum = readPressureKPa();
+  if (currentVacuum > MAX_ALLOWED_VACUUM && relayEnabled) {
+  emergencyStop("Over-pressurized — possible backflow");
+}
   dynamicTargetVacuumKPa = readPotentiometerKPa();
   Serial.print("Vacuum: ");
   Serial.print(currentVacuum);
@@ -233,5 +234,4 @@ void loop()
   Serial.print(dynamicTargetVacuumKPa);
   Serial.println(" kPa");
   controlPump(currentVacuum, dynamicTargetVacuumKPa);
-  delay(50);
 }
