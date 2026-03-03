@@ -23,8 +23,8 @@ const unsigned long STARTUP_DELAY_MS = 2000;  // задержка включен
 // АЦП
 const float ADC_REFERENCE_VOLTAGE = 4.7;
 const float ADC_MAX_VALUE = 1023.0;
-const float SENSOR_MIN_VOLT = 0.5;
-const float SENSOR_MAX_VOLT = 4.43;
+const float SENSOR_MIN_VOLT = 0.4;
+const float SENSOR_MAX_VOLT = 4.5;
 
 // Аварийные границы датчика давления (УТОЧНИ)
 const float SENSOR_ERROR_LOW = 0.4;
@@ -35,7 +35,7 @@ const uint8_t FILTER_SAMPLES = 20;
 
 // скважность PWM (две скорости насоса)
 const uint8_t PWM_FULL = 255; // 100% duty cycle сигнала
-const uint8_t PWM_LOW = 200; // где то 11В при 12В питании (НАДО БУДЕТ СКОРРЕКТИРОВАТЬ ПОСЛЕ ТЕСТОВ)
+const uint8_t PWM_LOW = 200;  // где то 11В при 12В питании (НАДО БУДЕТ СКОРРЕКТИРОВАТЬ ПОСЛЕ ТЕСТОВ)
 
 // переменные
 
@@ -72,16 +72,14 @@ void emergencyStop(const char *message)
 
   // отключаем защитное реле
   disableRelay();
-  relayEnabled = false;
 
   Serial.println("!!! ERROR !!!");
   Serial.println(message);
-
-  wdt_disable();
-
   while (true)
   {
     // HALTED Полная остановка
+    wdt_reset();
+    delay(100);
   }
 }
 
@@ -91,9 +89,9 @@ float readPotentiometerKPa()
 {
   int raw = analogRead(POT_PIN); // 0–1023
   // Переводим в 10 - 40 кПа
-  float mapped = map(raw, 0, 1023, 10, 30);
-  //float mapped = 30; //тест
-  return mapped;
+  float ratio = (float)raw / 1023.0f;
+  // float mapped = 30; //тест
+  return constrain(10.0f + ratio * 20.0f, 10.0f, 30.0f); // linear 10 → 30 kPa
 }
 
 // считывание давления
@@ -105,13 +103,13 @@ float readPressureKPa()
   for (uint8_t i = 0; i < FILTER_SAMPLES; i++)
   {
     sum += analogRead(PRESSURE_PIN);
-     //float sensorNOW = analogRead(PRESSURE_PIN);
+    // float sensorNOW = analogRead(PRESSURE_PIN);
     delay(5);
   }
 
   float adcValue = sum / (float)FILTER_SAMPLES;
   float voltage = adcValue * ADC_REFERENCE_VOLTAGE / ADC_MAX_VALUE;
-  //Serial.println(voltage);
+  // Serial.println(voltage);
 
   if (voltage < SENSOR_ERROR_LOW || voltage > SENSOR_ERROR_HIGH)
   {
@@ -120,8 +118,10 @@ float readPressureKPa()
 
   float pressureKPa = (SENSOR_MAX_VOLT - voltage) * (100.0 / (SENSOR_MAX_VOLT - SENSOR_MIN_VOLT));
   // Ограничение значений
-  if (pressureKPa < 0) pressureKPa = 0;
-  if (pressureKPa > 100) pressureKPa = 100;
+  if (pressureKPa < 0)
+    pressureKPa = 0;
+  if (pressureKPa > 100)
+    pressureKPa = 100;
 
   return pressureKPa;
 }
@@ -144,7 +144,7 @@ void setPumpSpeed(float currentVacuum, float targetVacuum)
   }
 }
 
-//управление насосом вкл выкл
+// управление насосом вкл выкл
 void controlPump(float currentVacuum, float targetVacuum)
 {
   float pumpOnThreshold = targetVacuum - PUMP_ON_DELTA;
@@ -183,7 +183,7 @@ void controlPump(float currentVacuum, float targetVacuum)
       // disableRelay();
 
       firstStartCompleted = true;
-      
+
       Serial.println("Pump OFF");
     }
   }
@@ -205,11 +205,11 @@ void setup()
   pinMode(PUMP_PWM_PIN, OUTPUT);
   pinMode(SAFETY_RELAY_PIN, OUTPUT);
 
-  analogWrite(PUMP_PWM_PIN, 0);
   digitalWrite(SAFETY_RELAY_PIN, LOW);
+  analogWrite(PUMP_PWM_PIN, 0);
 
   Serial.println("System booting...");
-  delay(STARTUP_DELAY_MS); // 3 секунды ожидания пере запуском
+  delay(STARTUP_DELAY_MS); // ожидания пере запуском
   // Watchdog 2 секунды
   wdt_enable(WDTO_2S);
 
@@ -224,9 +224,10 @@ void loop()
 {
   wdt_reset();
   float currentVacuum = readPressureKPa();
-  if (currentVacuum > MAX_ALLOWED_VACUUM && relayEnabled) {
-  emergencyStop("Over-pressurized — possible backflow");
-}
+  if (currentVacuum > MAX_ALLOWED_VACUUM && relayEnabled)
+  {
+    emergencyStop("Over-pressurized — possible backflow");
+  }
   dynamicTargetVacuumKPa = readPotentiometerKPa();
   Serial.print("Vacuum: ");
   Serial.print(currentVacuum);
