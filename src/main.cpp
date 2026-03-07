@@ -31,7 +31,9 @@ const float SENSOR_ERROR_LOW = 0.4;
 const float SENSOR_ERROR_HIGH = 4.8;
 
 // сколько сэмплов брать для фильтрации сигнала (задержку вывести сюда надо бы)
-const uint8_t FILTER_SAMPLES = 50;
+const uint8_t FILTER_SAMPLES = 51;
+ // коэффициент сглаживания потенциометра
+const float POT_SMOOTH_ALPHA = 0.1f;
 
 // кольцевой буфер для медианного фильтра
 uint16_t pressureBuffer[FILTER_SAMPLES];
@@ -43,7 +45,7 @@ const uint8_t PWM_FULL = 255; // 100% duty cycle сигнала
 const uint8_t PWM_LOW = 150;  // где то 11В при 12В питании (НАДО БУДЕТ СКОРРЕКТИРОВАТЬ ПОСЛЕ ТЕСТОВ)
 
 // переменные
-
+float filteredPotKPa = 20.0f; // стартовое значение потенциометра
 bool firstStartCompleted = false; // флаг первого запуска насоса
 bool pumpState = false;
 bool relayEnabled = false;
@@ -92,14 +94,18 @@ void emergencyStop(const char *message)
 
 float readPotentiometerKPa()
 {
-  int raw = analogRead(POT_PIN); // 0–1023
-  // Переводим в 10 - 40 кПа
+  int raw = analogRead(POT_PIN);
+
   float ratio = (float)raw / 1023.0f;
-  // float mapped = 30; //тест
-  return constrain(10.0f + ratio * 20.0f, 10.0f, 30.0f); // linear 10 → 30 kPa
+  float target = constrain(10.0f + ratio * 20.0f, 10.0f, 30.0f);
+
+  // экспоненциальное сглаживание
+  filteredPotKPa += POT_SMOOTH_ALPHA * (target - filteredPotKPa);
+
+  return filteredPotKPa;
 }
 
-//вычесление медианы из буффера
+// вычесление медианы из буффера
 
 uint16_t medianOfBuffer(uint16_t *data, uint8_t size)
 {
@@ -137,17 +143,22 @@ float readPressureKPa()
   pressureIndex = (pressureIndex + 1) % FILTER_SAMPLES;
 
   if (pressureCount < FILTER_SAMPLES)
-    pressureCount++;
-
-  // в первый запуск надо сначал заполнить буффер
-  if (pressureCount < FILTER_SAMPLES)
   {
-    delay(5);
-    return readPressureKPa();
+    pressureCount++;
   }
 
-  // высчитывем медиану
-  uint16_t adcValue = medianOfBuffer(pressureBuffer, FILTER_SAMPLES);
+  // в первый запуск надо сначал заполнить буффер
+  uint16_t adcValue;
+
+  if (pressureCount < FILTER_SAMPLES)
+  {
+    adcValue = raw;
+  }
+  else
+  {
+    // высчитывем медиану
+    adcValue = medianOfBuffer(pressureBuffer, FILTER_SAMPLES);
+  }
 
   float voltage = adcValue * ADC_REFERENCE_VOLTAGE / ADC_MAX_VALUE;
 
@@ -157,7 +168,7 @@ float readPressureKPa()
   }
 
   float pressureKPa = (SENSOR_ATM_VOLTAGE - voltage) * (100.0f / (SENSOR_ATM_VOLTAGE - SENSOR_MAX_VACuum_VOLT));
-  //ограничения
+  // ограничения
   pressureKPa = constrain(pressureKPa, 0.0f, 100.0f);
 
   return pressureKPa;
