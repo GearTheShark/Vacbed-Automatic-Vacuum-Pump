@@ -18,7 +18,7 @@ const float PUMP_OFF_DELTA = 2.0; // Выключение выше цели
 // таймеры и задержки
 const unsigned long RESTART_DELAY_MS = 15000; // задержка повторного включения
 const unsigned long MAX_RUN_TIME_MS = 60000;  // максимум 1 минута непрерывной работы
-const unsigned long STARTUP_DELAY_MS = 2000;  // задержка включения реле после старта
+const unsigned long STARTUP_DELAY_MS = 1000;  // задержка включения реле после старта
 
 // АЦП
 const float ADC_REFERENCE_VOLTAGE = 5.0;
@@ -31,7 +31,12 @@ const float SENSOR_ERROR_LOW = 0.4;
 const float SENSOR_ERROR_HIGH = 4.8;
 
 // сколько сэмплов брать для фильтрации сигнала (задержку вывести сюда надо бы)
-const uint8_t FILTER_SAMPLES = 20;
+const uint8_t FILTER_SAMPLES = 50;
+
+// кольцевой буфер для медианного фильтра
+uint16_t pressureBuffer[FILTER_SAMPLES];
+uint8_t pressureIndex = 0;
+uint8_t pressureCount = 0;
 
 // скважность PWM (две скорости насоса)
 const uint8_t PWM_FULL = 255; // 100% duty cycle сигнала
@@ -94,23 +99,57 @@ float readPotentiometerKPa()
   return constrain(10.0f + ratio * 20.0f, 10.0f, 30.0f); // linear 10 → 30 kPa
 }
 
+//вычесление медианы из буффера
+
+uint16_t medianOfBuffer(uint16_t *data, uint8_t size)
+{
+  uint16_t temp[FILTER_SAMPLES];
+
+  for (uint8_t i = 0; i < size; i++)
+    temp[i] = data[i];
+
+  // сортировка
+  for (uint8_t i = 0; i < size - 1; i++)
+  {
+    for (uint8_t j = i + 1; j < size; j++)
+    {
+      if (temp[j] < temp[i])
+      {
+        uint16_t t = temp[i];
+        temp[i] = temp[j];
+        temp[j] = t;
+      }
+    }
+  }
+
+  return temp[size / 2];
+}
+
 // считывание давления
 
 float readPressureKPa()
 {
-  uint32_t sum = 0;
+  // читаем одно значение
+  uint16_t raw = analogRead(PRESSURE_PIN);
 
-  for (uint8_t i = 0; i < FILTER_SAMPLES; i++)
+  // пишем в кольцевой буфер
+  pressureBuffer[pressureIndex] = raw;
+  pressureIndex = (pressureIndex + 1) % FILTER_SAMPLES;
+
+  if (pressureCount < FILTER_SAMPLES)
+    pressureCount++;
+
+  // в первый запуск надо сначал заполнить буффер
+  if (pressureCount < FILTER_SAMPLES)
   {
-    sum += analogRead(PRESSURE_PIN);
-    // float sensorNOW = analogRead(PRESSURE_PIN);
     delay(5);
+    return readPressureKPa();
   }
- //Serial.println(sum);
-  float adcValue = sum / (float)FILTER_SAMPLES;
-  // Serial.println(adcValue);
+
+  // высчитывем медиану
+  uint16_t adcValue = medianOfBuffer(pressureBuffer, FILTER_SAMPLES);
+
   float voltage = adcValue * ADC_REFERENCE_VOLTAGE / ADC_MAX_VALUE;
-  //Serial.println(voltage);
 
   if (voltage < SENSOR_ERROR_LOW || voltage > SENSOR_ERROR_HIGH)
   {
@@ -118,12 +157,11 @@ float readPressureKPa()
   }
 
   float pressureKPa = (SENSOR_ATM_VOLTAGE - voltage) * (100.0f / (SENSOR_ATM_VOLTAGE - SENSOR_MAX_VACuum_VOLT));
-  // Ограничение значений
+  //ограничения
   pressureKPa = constrain(pressureKPa, 0.0f, 100.0f);
 
   return pressureKPa;
 }
-
 
 // Управление скоростью насоса через pwm
 
