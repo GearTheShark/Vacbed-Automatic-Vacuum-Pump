@@ -21,21 +21,21 @@ const unsigned long MAX_RUN_TIME_MS = 60000;  // максимум 1 минута
 const unsigned long STARTUP_DELAY_MS = 2000;  // задержка включения реле после старта
 
 // АЦП
-const float ADC_REFERENCE_VOLTAGE = 4.7;
+const float ADC_REFERENCE_VOLTAGE = 5.0;
 const float ADC_MAX_VALUE = 1023.0;
-const float SENSOR_MIN_VOLT = 0.4;
-const float SENSOR_MAX_VOLT = 4.5;
+const float SENSOR_MAX_VACuum_VOLT = 0.5;
+const float SENSOR_ATM_VOLTAGE = 4.5;
 
 // Аварийные границы датчика давления (УТОЧНИ)
 const float SENSOR_ERROR_LOW = 0.4;
-const float SENSOR_ERROR_HIGH = 4.6;
+const float SENSOR_ERROR_HIGH = 4.8;
 
 // сколько сэмплов брать для фильтрации сигнала (задержку вывести сюда надо бы)
 const uint8_t FILTER_SAMPLES = 20;
 
 // скважность PWM (две скорости насоса)
 const uint8_t PWM_FULL = 255; // 100% duty cycle сигнала
-const uint8_t PWM_LOW = 200;  // где то 11В при 12В питании (НАДО БУДЕТ СКОРРЕКТИРОВАТЬ ПОСЛЕ ТЕСТОВ)
+const uint8_t PWM_LOW = 150;  // где то 11В при 12В питании (НАДО БУДЕТ СКОРРЕКТИРОВАТЬ ПОСЛЕ ТЕСТОВ)
 
 // переменные
 
@@ -106,25 +106,24 @@ float readPressureKPa()
     // float sensorNOW = analogRead(PRESSURE_PIN);
     delay(5);
   }
-
+ //Serial.println(sum);
   float adcValue = sum / (float)FILTER_SAMPLES;
+  // Serial.println(adcValue);
   float voltage = adcValue * ADC_REFERENCE_VOLTAGE / ADC_MAX_VALUE;
-  // Serial.println(voltage);
+  //Serial.println(voltage);
 
   if (voltage < SENSOR_ERROR_LOW || voltage > SENSOR_ERROR_HIGH)
   {
     emergencyStop("Sensor voltage out of range");
   }
 
-  float pressureKPa = (SENSOR_MAX_VOLT - voltage) * (100.0 / (SENSOR_MAX_VOLT - SENSOR_MIN_VOLT));
+  float pressureKPa = (SENSOR_ATM_VOLTAGE - voltage) * (100.0f / (SENSOR_ATM_VOLTAGE - SENSOR_MAX_VACuum_VOLT));
   // Ограничение значений
-  if (pressureKPa < 0)
-    pressureKPa = 0;
-  if (pressureKPa > 100)
-    pressureKPa = 100;
+  pressureKPa = constrain(pressureKPa, 0.0f, 100.0f);
 
   return pressureKPa;
 }
+
 
 // Управление скоростью насоса через pwm
 
