@@ -9,7 +9,7 @@ const uint8_t SAFETY_RELAY_PIN = 8; // MOSFET защитного реле
 
 // Желаемый вакуум дефолтное значение
 float dynamicTargetVacuumKPa = 25.0;
-const float MAX_ALLOWED_VACUUM = 40.0;
+const float MAX_ALLOWED_VACUUM = 35.0;
 
 // Гистерезис
 const float PUMP_ON_DELTA = 5.0;  // Включение ниже цели
@@ -23,7 +23,7 @@ const unsigned long STARTUP_DELAY_MS = 1000;  // задержка включен
 // АЦП
 const float ADC_REFERENCE_VOLTAGE = 5.0;
 const float ADC_MAX_VALUE = 1023.0;
-const float SENSOR_MAX_VACuum_VOLT = 0.5;
+const float SENSOR_MAX_VACUUM_VOLT = 0.5;
 const float SENSOR_ATM_VOLTAGE = 4.5;
 
 // Аварийные границы датчика давления (УТОЧНИ)
@@ -31,12 +31,12 @@ const float SENSOR_ERROR_LOW = 0.4;
 const float SENSOR_ERROR_HIGH = 4.8;
 
 // сколько сэмплов брать для фильтрации сигнала (задержку вывести сюда надо бы)
-const uint8_t FILTER_SAMPLES = 51;
+const uint8_t FILTER_SAMPLES = 31;
  // коэффициент сглаживания потенциометра
 const float POT_SMOOTH_ALPHA = 0.1f;
 
 // кольцевой буфер для медианного фильтра
-uint16_t pressureBuffer[FILTER_SAMPLES];
+uint16_t pressureBuffer[FILTER_SAMPLES] = {0}; //заполняем нулями во избежании мусора
 uint8_t pressureIndex = 0;
 uint8_t pressureCount = 0;
 
@@ -167,7 +167,7 @@ float readPressureKPa()
     emergencyStop("Sensor voltage out of range");
   }
 
-  float pressureKPa = (SENSOR_ATM_VOLTAGE - voltage) * (100.0f / (SENSOR_ATM_VOLTAGE - SENSOR_MAX_VACuum_VOLT));
+  float pressureKPa = (SENSOR_ATM_VOLTAGE - voltage) * (100.0f / (SENSOR_ATM_VOLTAGE - SENSOR_MAX_VACUUM_VOLT));
   // ограничения
   pressureKPa = constrain(pressureKPa, 0.0f, 100.0f);
 
@@ -264,6 +264,7 @@ void setup()
   Serial.println("Startup delay complete. System ready.");
   enableRelay();
   delay(1000);
+  wdt_reset();
 }
 
 // loop
