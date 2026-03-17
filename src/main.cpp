@@ -19,6 +19,7 @@ const float PUMP_OFF_DELTA = 2.0; // Выключение выше цели
 const unsigned long RESTART_DELAY_MS = 15000; // задержка повторного включения
 const unsigned long MAX_RUN_TIME_MS = 60000;  // максимум 1 минута непрерывной работы
 const unsigned long STARTUP_DELAY_MS = 1000;  // задержка включения реле после старта
+const unsigned long PUMP_RAMP_TIME_MS = 300; // время плавного разгона
 
 // АЦП
 const float ADC_REFERENCE_VOLTAGE = 5.0;
@@ -43,12 +44,14 @@ uint8_t pressureCount = 0;
 // скважность PWM (две скорости насоса)
 const uint8_t PWM_FULL = 255; // 100% duty cycle сигнала
 const uint8_t PWM_LOW = 150;  // где то 11В при 12В питании (НАДО БУДЕТ СКОРРЕКТИРОВАТЬ ПОСЛЕ ТЕСТОВ)
+const uint8_t PWM_MIN = 80;  // начало разгона
 
 // переменные
 float filteredPotKPa = 20.0f; // стартовое значение потенциометра
 bool firstStartCompleted = false; // флаг первого запуска насоса
 bool pumpState = false;
 bool relayEnabled = false;
+bool pumpRamping = false; // мотор разгоняется?
 
 unsigned long lastPumpStopTime = 0;
 unsigned long pumpStartTime = 0;
@@ -180,16 +183,31 @@ void setPumpSpeed(float currentVacuum, float targetVacuum)
 {
   float halfTarget = targetVacuum / 2.0;
 
-  if (currentVacuum < halfTarget)
+  uint8_t targetPWM = (currentVacuum < halfTarget) ? PWM_FULL : PWM_LOW;
+
+  unsigned long now = millis();
+  unsigned long elapsed = now - pumpStartTime;
+
+  // если идет разгон
+  if (pumpRamping)
   {
-    analogWrite(PUMP_PWM_PIN, PWM_FULL);
-    Serial.println("Pump FULL Speed");
+    if (elapsed >= PUMP_RAMP_TIME_MS)
+    {
+      pumpRamping = false;
+      analogWrite(PUMP_PWM_PIN, targetPWM);
+      return;
+    }
+
+    // линейный разгон от 0 до targetPWM
+    float progress = (float)elapsed / PUMP_RAMP_TIME_MS;
+    uint8_t pwm = (uint8_t)(targetPWM * progress);
+    if (pwm < PWM_MIN) pwm = PWM_MIN;
+    analogWrite(PUMP_PWM_PIN, pwm);
+    return;
   }
-  else
-  {
-    analogWrite(PUMP_PWM_PIN, PWM_LOW);
-    Serial.println("Pump LOW Speed");
-  }
+
+  // обычная работа после разгона
+  analogWrite(PUMP_PWM_PIN, targetPWM);
 }
 
 // управление насосом вкл выкл
@@ -213,14 +231,15 @@ void controlPump(float currentVacuum, float targetVacuum)
     {
       pumpState = true;
       pumpStartTime = now;
-      Serial.println("Pump ON");
+      pumpRamping = true;
+      Serial.println("Pump ON (ramping)");
     }
   }
   else
   {
     if (currentVacuum >= pumpOffThreshold)
     {
-
+      pumpRamping = false;
       pumpState = false;
       lastPumpStopTime = now;
 
