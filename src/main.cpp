@@ -16,10 +16,11 @@ const float PUMP_ON_DELTA = 5.0;  // Включение ниже цели
 const float PUMP_OFF_DELTA = 2.0; // Выключение выше цели
 
 // таймеры и задержки
-const unsigned long RESTART_DELAY_MS = 15000; // задержка повторного включения
-const unsigned long MAX_RUN_TIME_MS = 60000;  // максимум 1 минута непрерывной работы
-const unsigned long STARTUP_DELAY_MS = 1000;  // задержка включения реле после старта
-const unsigned long PUMP_RAMP_TIME_MS = 300; // время плавного разгона
+const unsigned long RESTART_DELAY_MS = 15000;       // задержка повторного включения
+const unsigned long MAX_RUN_TIME_MS = 60000;        // максимум 1 минута непрерывной работы
+const unsigned long STARTUP_DELAY_MS = 1000;        // задержка включения реле после старта
+const unsigned long PUMP_RAMP_TIME_MS = 250;        // время плавного разгона
+const unsigned long PUMP_SPEED_RAMP_TIME_MS = 500; // время плавного изменения скорости
 
 // АЦП
 const float ADC_REFERENCE_VOLTAGE = 5.0;
@@ -33,25 +34,32 @@ const float SENSOR_ERROR_HIGH = 4.8;
 
 // сколько сэмплов брать для фильтрации сигнала (задержку вывести сюда надо бы)
 const uint8_t FILTER_SAMPLES = 31;
- // коэффициент сглаживания потенциометра
+// коэффициент сглаживания потенциометра
 const float POT_SMOOTH_ALPHA = 0.1f;
 
 // кольцевой буфер для медианного фильтра
-uint16_t pressureBuffer[FILTER_SAMPLES] = {0}; //заполняем нулями во избежании мусора
+uint16_t pressureBuffer[FILTER_SAMPLES] = {0}; // заполняем нулями во избежании мусора
 uint8_t pressureIndex = 0;
 uint8_t pressureCount = 0;
+
+// переменные изменения скорости насосаё
+uint8_t rampStartPWM = 0;
+uint8_t rampTargetPWM = 0;
+unsigned long speedRampStartTime = 0;
+uint8_t currentPWM = 0;
 
 // скважность PWM (две скорости насоса)
 const uint8_t PWM_FULL = 255; // 100% duty cycle сигнала
 const uint8_t PWM_LOW = 150;  // где то 11В при 12В питании (НАДО БУДЕТ СКОРРЕКТИРОВАТЬ ПОСЛЕ ТЕСТОВ)
-const uint8_t PWM_MIN = 80;  // начало разгона
+const uint8_t PWM_MIN = 80;   // начало разгона
 
 // переменные
-float filteredPotKPa = 20.0f; // стартовое значение потенциометра
+float filteredPotKPa = 20.0f;     // стартовое значение потенциометра
 bool firstStartCompleted = false; // флаг первого запуска насоса
 bool pumpState = false;
 bool relayEnabled = false;
-bool pumpRamping = false; // мотор разгоняется?
+bool pumpRamping = false;  // мотор разгоняется?
+bool speedRamping = false; // мотор меняет скорость?
 
 unsigned long lastPumpStopTime = 0;
 unsigned long pumpStartTime = 0;
@@ -78,6 +86,7 @@ void emergencyStop(const char *message)
 {
   // авайрийно выключаем насос
   analogWrite(PUMP_PWM_PIN, 0);
+  currentPWM = 0;
   pumpState = false;
 
   // отключаем защитное реле
@@ -182,32 +191,66 @@ float readPressureKPa()
 void setPumpSpeed(float currentVacuum, float targetVacuum)
 {
   float halfTarget = targetVacuum / 2.0;
-
-  uint8_t targetPWM = (currentVacuum < halfTarget) ? PWM_FULL : PWM_LOW;
+  uint8_t desiredPWM = (currentVacuum < halfTarget) ? PWM_FULL : PWM_LOW;
 
   unsigned long now = millis();
-  unsigned long elapsed = now - pumpStartTime;
 
-  // если идет разгон
   if (pumpRamping)
   {
+    unsigned long elapsed = now - pumpStartTime;
+
     if (elapsed >= PUMP_RAMP_TIME_MS)
     {
       pumpRamping = false;
-      analogWrite(PUMP_PWM_PIN, targetPWM);
+      speedRamping = false;    // сброс второго ramp
+      currentPWM = desiredPWM; // синхронизация
+      analogWrite(PUMP_PWM_PIN, desiredPWM);
       return;
     }
 
-    // линейный разгон от 0 до targetPWM
     float progress = (float)elapsed / PUMP_RAMP_TIME_MS;
-    uint8_t pwm = (uint8_t)(targetPWM * progress);
-    if (pwm < PWM_MIN) pwm = PWM_MIN;
+    uint8_t pwm = (uint8_t)(desiredPWM * progress);
+
+    if (pwm < PWM_MIN)
+      pwm = PWM_MIN;
+    currentPWM = pwm;
     analogWrite(PUMP_PWM_PIN, pwm);
     return;
   }
 
-  // обычная работа после разгона
-  analogWrite(PUMP_PWM_PIN, targetPWM);
+  // ПЛАВНОЕ ИЗМЕНЕНИЕ СКОРОСТИ
+  // если нужно изменить скорость — запускаем ramp
+  if (!speedRamping && currentPWM != desiredPWM)
+  {
+    speedRamping = true;
+    rampStartPWM = currentPWM;
+    rampTargetPWM = desiredPWM;
+    speedRampStartTime = now;
+  }
+
+  if (speedRamping)
+  {
+    unsigned long elapsed = now - speedRampStartTime;
+
+    if (elapsed >= PUMP_SPEED_RAMP_TIME_MS)
+    {
+      speedRamping = false;
+      currentPWM = rampTargetPWM;
+      analogWrite(PUMP_PWM_PIN, currentPWM);
+      return;
+    }
+
+    float progress = (float)elapsed / PUMP_SPEED_RAMP_TIME_MS;
+
+    currentPWM = rampStartPWM + (uint8_t)((rampTargetPWM - rampStartPWM) * progress);
+
+    analogWrite(PUMP_PWM_PIN, currentPWM);
+    return;
+  }
+
+  // обычный режим
+  currentPWM = desiredPWM;
+  analogWrite(PUMP_PWM_PIN, currentPWM);
 }
 
 // управление насосом вкл выкл
@@ -245,6 +288,7 @@ void controlPump(float currentVacuum, float targetVacuum)
 
       // Сначала отключаем PWM
       analogWrite(PUMP_PWM_PIN, 0);
+      currentPWM = 0;
 
       // Затем отключаем реле
       // disableRelay();
